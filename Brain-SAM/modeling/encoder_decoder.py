@@ -21,31 +21,16 @@ def compute_dice(mask_gt, mask_pred):
     return 2*volume_intersect / volume_sum
 
 def get_3d_gaussian_kernel(radius=3, sigma=1.0, device="cpu"):
-    """
-    生成一个 3D 高斯核，shape 为 (2r+1, 2r+1, 2r+1)
-    """
+
     size = 2 * radius + 1
     ax = torch.arange(-radius, radius + 1, device=device)
     xx, yy, zz = torch.meshgrid(ax, ax, ax, indexing='ij')
     kernel = torch.exp(-(xx**2 + yy**2 + zz**2) / (2 * sigma**2))
-    kernel = kernel / kernel.max()  # 归一化到 [0, 1]
+    kernel = kernel / kernel.max() 
     return kernel*5
 
 def refine_mask_with_clicks_gaussian(masks, points_input, labels_input, radius=3, sigma=1.0, threshold=0.5):
-    """
-    使用 3D 高斯核对点击点周围区域进行启发式平滑修正
 
-    Args:
-        masks: Tensor [B, 1, D, H, W], float32 in [0,1]
-        points_input: Tensor [B, N, 3], int (z, y, x)
-        labels_input: Tensor [B, N], int (0=neg, 1=pos)
-        radius: int, 高斯核半径
-        sigma: float, 高斯标准差
-        threshold: float, mask 二值化阈值
-
-    Returns:
-        refined_mask: Tensor [B, 1, D, H, W], binary
-    """
     B, _, D, H, W = masks.shape
     device = masks.device
     refined = masks.clone()
@@ -66,7 +51,7 @@ def refine_mask_with_clicks_gaussian(masks, points_input, labels_input, radius=3
             x_start = max(x - radius, 0)
             x_end   = min(x + radius + 1, W)
 
-            # 对应 kernel 的有效区域（截断边缘）
+
             kz_start = radius - (z - z_start)
             ky_start = radius - (y - y_start)
             kx_start = radius - (x - x_start)
@@ -82,9 +67,8 @@ def refine_mask_with_clicks_gaussian(masks, points_input, labels_input, radius=3
             else:
                 refined[b, 0, z_start:z_end, y_start:y_end, x_start:x_end] -= patch
 
-    # 限制到 [0,1]
     refined = torch.clamp(refined, 0.0, 1.0)
-    # 二值化
+
     refined_binary = (refined > threshold).float()
     diff = (refined_binary != (masks > threshold)).sum()
     return refined_binary
@@ -101,7 +85,7 @@ class SAM2_3D_prompt_after_decoder(nn.Module):
         self.device=device
         self.multi_click=multi_click
         self.patch_size = patch_size
-        # 获取骨干网络通道配置
+
         backbone_channels = self.img_encoder.neck.backbone_channel_list
         self.loss_boundary = nn.MSELoss()
         self.boundary_kernel_size=5
@@ -302,7 +286,7 @@ class SAM2_3D_prompt_after_decoder_with_auto_test(nn.Module):
         self.device=device
         self.multi_click=multi_click
         self.patch_size = patch_size
-        # 获取骨干网络通道配置
+
         backbone_channels = self.img_encoder.neck.backbone_channel_list
     
     def _get_next_click3D_torch_2(self,prev_seg, gt_semantic_seg):
@@ -442,10 +426,10 @@ class SAM2_3D_prompt_after_decoder_with_auto_test(nn.Module):
         reduction="mean"
     )   
         loss_cal = DiceFocalLoss(
-            include_background=True,   # 二分类通常需要包含背景通道
-            sigmoid=True,              # ✅ 二分类，用 sigmoid
-            softmax=False,             # ❌ 不能开 softmax
-            to_onehot_y=False,         # ❌ 不需要 one-hot，如果 label 是 [B,1,H,W,D] 或 [B,H,W,D]
+            include_background=True,  
+            sigmoid=True,             
+            softmax=False,          
+            to_onehot_y=False,       
             lambda_dice=0.4,
             lambda_focal=0.6,
             gamma=3.0,
@@ -456,7 +440,7 @@ class SAM2_3D_prompt_after_decoder_with_auto_test(nn.Module):
         dice_loss = DiceLoss(include_background=True, softmax=False,sigmoid=False, to_onehot_y=False, reduction="none")
         dice_loss_auto=DiceLoss(include_background=False, softmax=True,sigmoid=False, to_onehot_y=True, reduction="none")
     #     loss_cal = DiceCELoss(include_background=False, softmax=True, to_onehot_y=True, lambda_dice=0.5, lambda_ce=0.5)
-        # 图像预处理：调整大小
+      
         out = F.interpolate(img.float(), scale_factor=512 / self.patch_size, mode='trilinear')
         
         # input_batch = (out.cuda() - pixel_mean) / pixel_std
@@ -526,7 +510,7 @@ class SAM2_3D_prompt_after_decoder_with_auto_test(nn.Module):
                         points_input,
                         labels_input,
                         radius=10,
-                        sigma=1.2,   # 越大越平滑
+                        sigma=1.2,  
                         threshold=0.5
                     )
                     # prev_masks=refined_mask
@@ -549,7 +533,7 @@ class SAM2_3D_prompt_after_decoder_with_auto_test(nn.Module):
                         points_input,
                         labels_input,
                         radius=10,
-                        sigma=1.2,   # 越大越平滑
+                        sigma=1.2,  
                         threshold=0.5
                     )
                     # prev_masks=refined_mask
@@ -562,14 +546,15 @@ class SAM2_3D_prompt_after_decoder_with_auto_test(nn.Module):
 
             prompt_max_dice = max(prompt_dice_list)
             prompt_max_idx = prompt_dice_list.index(prompt_max_dice)
-            print(f"有提示没后处理最大 Dice 值: {prompt_max_dice}，对应索引: {prompt_max_idx }")
-            # 取出对应的预测 mask
+
+
             prompt_masks = prompt_pred_list[prompt_max_idx] 
 
             print(postpre_dice_list)
             postpre_max_dice = max(postpre_dice_list)
             postpre_max_idx = postpre_dice_list.index(postpre_max_dice)
-            print(f"后处理最大 Dice 值: {postpre_max_dice}，对应索引: {postpre_max_idx }")
-            # 取出对应的预测 mask
+          
+        
             postpre_masks = postpre_pred_list[postpre_max_idx] 
         return masks_auto,prompt_masks,postpre_masks
+
