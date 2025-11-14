@@ -1,6 +1,8 @@
 # Brain-SAM 
 
-<img src="https://github.com/panyinghong/Brain-SAM/blob/main/figures/model.png" alt="MedSAM2 - Logo" width="30%">
+<div align="center">
+  <img src="https://github.com/panyinghong/Brain-SAM/blob/main/figures/model.png" width="1000">
+</div>
 
 ## Installation 
 
@@ -9,7 +11,7 @@
 - cd Brain-SAM
 - `pip install -e .`
 
-## datasets
+## Data Format
 ```python
 npz = np.load('path to/brain_tumor.npz', allow_pickle=True)
 imgs = npz['imgs'] # (D, W, H), [0, 255]
@@ -26,3 +28,7 @@ nohup env CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py --data_p
 python -m torch.distributed.run --nproc_per_node=2 --master_port=29857 test.py
 ```
 
+## Major Results
+<div align="center">
+  <img src="https://github.com/panyinghong/Brain-SAM/blob/main/figures/result.png" width="800">
+</div>
