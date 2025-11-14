@@ -14,7 +14,7 @@ from segment_anything.modeling.common import LayerNorm2d, MLPBlock
 from segment_anything.modeling.image_encoder import Attention, PatchEmbed, window_partition, window_unpartition
 
 
-class PIM(nn.Module):
+class Adapter(nn.Module):
     def __init__(
             self,
             input_dim,
@@ -75,8 +75,8 @@ class Hiera(nn.Module):
 
     def __init__(
         self,
-        img_size: int = 1024,
-        patch_size: int = 16,
+        img_size: int = 128,
+        patch_size: int = 3,
         patch_depth: int=32,
         in_chans: int = 3,
         embed_dim: int = 96,
@@ -117,22 +117,17 @@ class Hiera(nn.Module):
 
         self.patch_embed = PatchEmbed3D(
             kernel_size=(patch_size, patch_size, patch_size),
-            stride=(patch_size, patch_size, patch_size),
             in_chans=in_chans,
             embed_dim=embed_dim,
         )
 
         self.num_slice = num_slice
-        if self.num_slice > 1:
-            self.slice_embed = nn.Conv3d(in_channels=embed_dim, out_channels=embed_dim,
-                                         kernel_size=(1,1,self.num_slice), stride=(1,1,self.num_slice),
-                                         groups=embed_dim)
         self.pos_embed: Optional[nn.Parameter] = None
 
         self.pos_embed = nn.Parameter(
             torch.zeros(1, img_size // patch_size, img_size // patch_size, img_size // patch_size, embed_dim)
         )
-
+   
         self.pos_embed_window = nn.Parameter(
             torch.zeros(1, embed_dim, self.window_spec[0], self.window_spec[0],self.window_spec[0])
         )
@@ -147,12 +142,12 @@ class Hiera(nn.Module):
 
 
         self.blocks = nn.ModuleList()
-        split_point = depth // 2  
+        split_point = depth // 2  # Split blocks equally between GPUs
 
+        # self.neck=FPN3D().to(device_0)
         
         for i in range(depth):
             dim_out = embed_dim
-
             window_size = self.window_spec[cur_stage - 1]
 
             if self.global_att_blocks is not None:
@@ -170,10 +165,8 @@ class Hiera(nn.Module):
                 drop_path=dpr[i],
                 q_stride=self.q_stride if i in self.q_pool_blocks else None,
                 window_size=window_size,
-
             )
             
-
             self.blocks.append(block)
 
             embed_dim = dim_out
@@ -186,41 +179,32 @@ class Hiera(nn.Module):
         )
 
     def _get_pos_embed(self, dhw: Tuple[int, int, int]) -> torch.Tensor:
-        d, h, w = dhw  
+        d, h, w = dhw 
 
-        # 插值到 (D, H, W)
-        pos_embed = F.interpolate(self.pos_embed.permute(0,4,1,2,3), size=(d, h, w), mode="trilinear", align_corners=False) 
+   
+        pos_embed = F.interpolate(self.pos_embed.permute(0,4,1,2,3), size=(d, h, w), mode="trilinear", align_corners=False)  # shape: [1, C, D, H, W]
 
+        
         window_embed = self.pos_embed_window 
 
         tile_shape = [x // y for x, y in zip(pos_embed.shape[2:], window_embed.shape[2:])]
         window_embed = window_embed.repeat(1, 1, *tile_shape)
 
         pos_embed = pos_embed + window_embed  
-        pos_embed = pos_embed.permute(0, 2, 3, 4, 1)  
+        pos_embed = pos_embed.permute(0, 2, 3, 4, 1)  # [1, D, H, W, C]
 
         return pos_embed
 
-
-
     def forward(self, x: torch.Tensor) -> List[torch.Tensor]:
-
         x = self.patch_embed(x)
         if self.pos_embed is not None:
-
             x = x + self._get_pos_embed(x.shape[1:4])
-
         outputs = []
         for i, blk in enumerate(self.blocks):
-
             x = blk(x)
- 
             if (i == self.stage_ends[-1] or i in self.stage_ends) and self.return_interm_layers:
                 feats = x.permute(0, 4, 1, 2, 3)
                 outputs.append(feats)
-
-
-        
         return outputs
     
 
@@ -234,7 +218,6 @@ class MultiScaleBlock(nn.Module):
             num_heads: int,
             mlp_ratio: float = 4.0,
             drop_path: float = 0.1,
-            # qkv_bias: bool = True,
             norm_layer: Type[nn.Module] = nn.LayerNorm,
             act_layer: Type[nn.Module] = nn.GELU,
             q_stride: Tuple[int, int] = None,
@@ -274,7 +257,6 @@ class MultiScaleBlock(nn.Module):
             dim,
             dim_out,
             num_heads=num_heads,
-
             q_pool=self.pool,
 
         )
@@ -283,29 +265,31 @@ class MultiScaleBlock(nn.Module):
         self.norm2 = norm_layer(dim_out)
         self.mlp = MLP(dim_out, int(dim_out * mlp_ratio), dim_out,num_layers=2,activation=act_layer)
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
-        self.adapter = PIM(input_dim=dim, mid_dim=dim // 2)
+        self.adapter = Adapter(input_dim=dim, mid_dim=dim // 2)
         if dim != dim_out:
             self.proj = nn.Linear(dim, dim_out)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.adapter(x)
         shortcut = x
-
+        # print("shortcut's shape:",shortcut.shape)
         x = self.norm1(x)
         window_size=self.window_size
         # Skip connection
         if self.dim != self.dim_out:
             shortcut = do_pool(self.proj(x), self.pool)
-
+            # print("after pool,shortcut's shape:",shortcut.shape)
+        # Window partition
         if self.window_size > 0:
             H, W, D = x.shape[1], x.shape[2], x.shape[3]
-
+            # if self.shift_size > 0:
+            #     x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size, -self.shift_size), dims=(1,2,3))
             x, pad_hw = window_partition(x, self.window_size)
-
+        #x = self.attn(x, mask=self.attn_mask)
+        # print("before attn,x's shape:",x.shape)
         x = self.attn(x)
-
+        # print("after attn,x.shape:",x.shape)
         if self.q_stride:
-            # Shapes have changed due to Q pooling
             window_size = self.window_size // self.q_stride[0]
             H, W,D = shortcut.shape[1:4]
 
@@ -313,16 +297,17 @@ class MultiScaleBlock(nn.Module):
             pad_w = (window_size - W % window_size) % window_size
             pad_d = (window_size - D % window_size) % window_size
             pad_hw = (H + pad_h, W + pad_w,D+pad_d)
-
+        # Reverse window partition
         if self.window_size > 0:
             x = window_unpartition(x, window_size, pad_hw, (H, W, D))
+
 
         B,H,W,D,C=x.shape[0],x.shape[1],x.shape[2],x.shape[3],x.shape[4]
 
         x = shortcut + self.drop_path(x)
 
         x = x + self.drop_path(self.mlp(self.norm2(x)))
-
+    
         return x
 
 
@@ -361,10 +346,12 @@ class MultiScaleAttention(nn.Module):
         self.q_pool = q_pool
         self.qkv = nn.Linear(dim, dim_out * 3)
         self.proj = nn.Linear(dim_out, dim_out)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, H, W, D, _ = x.shape
+       
         qkv = self.qkv(x).reshape(B, H * W * D, 3, self.num_heads, -1)
+      
+
         q, k, v = torch.unbind(qkv, 2)
 
 
@@ -372,8 +359,6 @@ class MultiScaleAttention(nn.Module):
             q = do_pool(q.reshape(B, H, W,D ,-1), self.q_pool)
             H, W,D = q.shape[1:4]  # downsampled shape
             q = q.reshape(B, H * W*D, self.num_heads, -1)
-
-        # x = (attn @ v).view(B, self.num_heads, H, W, D, -1).permute(0, 2, 3, 4, 1, 5).reshape(B, H, W, D, -1)
         x = F.scaled_dot_product_attention(
             q.transpose(1, 2),
             k.transpose(1, 2),
@@ -382,24 +367,11 @@ class MultiScaleAttention(nn.Module):
         x = x.transpose(1, 2).reshape(B, H, W, D, -1)
         x = self.proj(x)
 
-
-
-
-
         return x
 
 
 def window_partition(x: torch.Tensor, window_size: int) -> Tuple[torch.Tensor, Tuple[int, int]]:
-    """
-    Partition into non-overlapping windows with padding if needed.
-    Args:
-        x (tensor): input tokens with [B, H, W, C].
-        window_size (int): window size.
-    Returns:
-        windows: windows after partition with [B * num_windows, window_size, window_size, C].
-        (Hp, Wp): padded height and width before partition
-    这段代码实现了一个 window_partition 函数，用于将一个输入张量（通常是一个 3D 图像或特征图）分割成大小固定的非重叠窗口。如果输入的高度、宽度或深度不完全是窗口大小的倍数，则会对输入进行填充，使得它的维度可以被窗口大小整除。
-    """
+
     B, H, W, D, C = x.shape
 
     pad_h = (window_size - H % window_size) % window_size
@@ -417,17 +389,7 @@ def window_partition(x: torch.Tensor, window_size: int) -> Tuple[torch.Tensor, T
 def window_unpartition(
         windows: torch.Tensor, window_size: int, pad_hw: Tuple[int, int, int], hw: Tuple[int, int, int]
 ) -> torch.Tensor:
-    """
-    Window unpartition into original sequences and removing padding.
-    Args:
-        windows (tensor): input tokens with [B * num_windows, window_size, window_size, C].
-        window_size (int): window size.
-        pad_hw (Tuple): padded height and width (Hp, Wp).
-        hw (Tuple): original height and width (H, W) before padding.
-    Returns:
-        x: unpartitioned sequences with [B, H, W, C].
-    这段代码实现了一个 window_unpartition 函数，它的作用是将先前分割成窗口的张量恢复（即反向操作），从窗口恢复到原来的形状，并且去掉填充部分。如果输入的张量在分割时进行了填充，这个函数会移除填充后的部分，恢复到原始尺寸。
-    """
+
     Hp, Wp, Dp = pad_hw
     H, W, D = hw
     B = windows.shape[0] // (Hp * Wp * Dp // window_size // window_size // window_size)
@@ -483,20 +445,7 @@ def add_decomposed_rel_pos(
         k_size: Tuple[int, int],
         lr,
 ) -> torch.Tensor:
-    """
-    Calculate decomposed Relative Positional Embeddings from :paper:`mvitv2`.
-    https://github.com/facebookresearch/mvit/blob/19786631e330df9f3622e5402b4a419a263a2c80/mvit/models/attention.py   # noqa B950
-    Args:
-        attn (Tensor): attention map.
-        q (Tensor): query q in the attention layer with shape (B, q_h * q_w, C).
-        rel_pos_h (Tensor): relative position embeddings (Lh, C) for height axis.
-        rel_pos_w (Tensor): relative position embeddings (Lw, C) for width axis.
-        q_size (Tuple): spatial sequence size of query q with (q_h, q_w).
-        k_size (Tuple): spatial sequence size of key k with (k_h, k_w).
-    Returns:
-        attn (Tensor): attention map with added relative positional embeddings.
-    add_decomposed_rel_pos 函数的作用是为给定的注意力图（attention map）添加相对位置编码（relative positional encoding）。这种方法在许多视觉任务中应用，以加强模型对空间位置的感知能力。此函数采用分解的相对位置编码，这些编码可以通过沿着不同的轴（如高度、宽度和深度）对查询和键进行编码来捕获空间关系。
-    """
+
     q_h, q_w, q_d = q_size
     k_h, k_w, k_d = k_size
     Rh = get_rel_pos(q_h, k_h, rel_pos_h)
@@ -517,6 +466,8 @@ def add_decomposed_rel_pos(
     ).view(B, q_h * q_w * q_d, k_h * k_w * k_d)
 
     return attn
+
+
 
 
 
@@ -570,9 +521,9 @@ class PatchEmbed3D(nn.Module):
 
     def __init__(
             self,
-            kernel_size: Tuple[int, int] = (16, 16, 16),
-            stride: Tuple[int, int] = (16, 16, 16),
-            padding: Tuple[int, int] = (0, 0, 0),
+            kernel_size: Tuple[int, int] = (3,3,3),
+            stride: Tuple[int, int] = (2,2,2),
+            padding: Tuple[int, int] = (1,1,1),
             in_chans: int = 1,
             embed_dim: int = 768,
     ) -> None:
@@ -597,6 +548,7 @@ class PatchEmbed3D(nn.Module):
         # B C X Y Z -> B X Y Z C
         x = x.permute(0, 2, 3, 4, 1)
         return x
+
 
 
 
