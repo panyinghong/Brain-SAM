@@ -132,32 +132,21 @@ class TwoWayTransformer(nn.Module):
           torch.Tensor: the processed point_embedding
           torch.Tensor: the processed image_embedding
         """
-        # BxCxHxW -> BxHWxC == B x N_image_tokens x C
+      
 
-        """
-        image_embedding: 这是一个代表图像或体积数据的高维张量，包含了每个像素或体素位置上的特征信息。
-        point_coord: 这个张量包含了你想要从中抽取特征的具体坐标。在调用 F.grid_sample 前，需要确保这些坐标被正确地归一化到 [-1, 1] 范围内，并且其形状符合函数的要求。
-        point_embedding: 经过 F.grid_sample(image_embedding, point_coord, align_corners=False) 的处理后，你会得到一个新的张量，这个张量包含了在 point_coord 指定的位置上从 image_embedding 中采样的结果。也就是说，point_embedding 表示了在特定点处的图像或体积数据的特征表示。
-        """
 
-        # point_embedding = F.grid_sample(image_embedding, point_coord, align_corners=False).squeeze(2).squeeze(2)
-        # # point_pe = F.grid_sample(image_pe, point_coord, align_corners=False).squeeze(2).squeeze(2)
-        # # point_pe = point_pe.permute(0, 2, 1)
+
+
         point_embedding = point_coord
         original_shape = image_embedding.shape
         image_embedding=image_embedding+dense_embeddings
-        image_embedding = image_embedding.flatten(2).permute(0, 2, 1)#python里的flatten(dim)表示，从第dim个维度开始展开，将后面的维度转化为一维。
+        image_embedding = image_embedding.flatten(2).permute(0, 2, 1)
         # image_pe = image_pe.flatten(2).permute(0, 2, 1)
         # Apply transformer blocks and final layernorm
         queries = point_embedding
         keys = image_embedding
         for layer in self.layers:
-            # image_embedding, point_embedding = layer(
-            #     image_embedding,
-            #     point_embedding,
-            #     image_pe,
-            #     point_pe,
-            # )
+
             keys, queries = layer(
             keys,
             queries,
@@ -167,9 +156,7 @@ class TwoWayTransformer(nn.Module):
         queries = queries + attn_out
         queries = self.norm_final_attn(queries)
 
-        # B,_,_=queries.shape
-        # queries = self.final_attn_n_to_1(q=self.query_token.expand(B, -1, -1),
-        #         k=queries, v=queries) 
+
 
 
         return keys,queries
@@ -546,3 +533,4 @@ class PositionEmbeddingRandom3D(nn.Module):
         coords[:, :, 1] = coords[:, :, 1] / image_size[1]
         coords[:, :, 2] = coords[:, :, 2] / image_size[2]
         return self._pe_encoding(coords.to(torch.float))  # B x N x C
+
