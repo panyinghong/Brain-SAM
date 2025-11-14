@@ -7,7 +7,7 @@
 ## Installation 
 
 - Create a virtual environment: `conda create -n brainsam python=3.10 -y` and `conda activate brainsam` 
-- Install [PyTorch](https://pytorch.org/get-started/locally/): `pip install torch==2.3.1` (Linux CUDA 12.4)
+- Install [PyTorch](https://pytorch.org/get-started/locally/): `torch==2.3.1` (Linux CUDA 12.4)
 - cd Brain-SAM
 - `pip install -e .`
 
@@ -15,7 +15,7 @@
 ```python
 npz = np.load('path to/brain_tumor.npz', allow_pickle=True)
 imgs = npz['imgs'] # (D, W, H), [0, 255]
-gts = npz['gts'] # (D, W, H), 3D tumor ground truth mask. It will be not available in the testing set
+gts = npz['gts'] # (D, W, H), 3D tumor ground truth mask. 
 ```
 
 ## Training Brain-SAM
@@ -29,6 +29,7 @@ python -m torch.distributed.run --nproc_per_node=2 --master_port=29857 test.py
 ```
 
 ## Major Results
+
 <div align="center">
-  <img src="https://github.com/panyinghong/Brain-SAM/blob/main/figures/result.png" width="800">
+  <img src="https://github.com/panyinghong/Brain-SAM/blob/main/figures/result.png" width="2600">
 </div>
