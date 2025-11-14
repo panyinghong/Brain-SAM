@@ -24,6 +24,8 @@ gts = npz['gts'] # (D, W, H), 3D tumor ground truth mask.
 nohup env CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py --data_prefix Your_data_prefix --snapshot_path your/work_dir --max_epoch 200 --rand_crop_size 128 --data_name your_data_name --lr 6e-5 -bs 3 > train.log 2>&1 &
 ```
 
+## Models
+The model weights used in our experiments can be downloaded from this ([Baidu Netdisk](https://pan.baidu.com/s/1wwHc15Qe036evuaCypRgfg?pwd=b2bd)) link.
 ## Inference
 ```bash
 python -m torch.distributed.run --nproc_per_node=2 --master_port=29857 test.py
