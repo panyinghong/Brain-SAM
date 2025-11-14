@@ -8,7 +8,7 @@ from setuptools import find_packages, setup
 NAME = "Brain-SAM"
 VERSION = "1.0.0"
 DESCRIPTION = "Brain-SAM"  
-URL = https://github.com/panyinghong/Brain-SAM"
+URL = "https://github.com/panyinghong/Brain-SAM"
 AUTHOR = "Pan Yinghong"
 LICENSE = "MIT"
 
