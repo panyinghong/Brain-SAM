@@ -1,4 +1,6 @@
-# Brain-SAM  
+# Brain-SAM 
+
+<img src="https://github.com/panyinghong/Brain-SAM/blob/main/figures/model.png" alt="MedSAM2 - Logo" width="30%">
 
 ## Installation 
 
