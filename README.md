@@ -29,7 +29,7 @@ python -m torch.distributed.run --nproc_per_node=2 --master_port=29857 test.py
 ```
 
 ## Major Results
-
+Our results outperform the state-of-the-art methods in terms of both Dice and HD95.
 <div align="center">
   <img src="https://github.com/panyinghong/Brain-SAM/blob/main/figures/result.png" width="2600">
 </div>
