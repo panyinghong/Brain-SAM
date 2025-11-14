@@ -13,6 +13,9 @@ import torch.nn.functional as F
 from segment_anything.modeling.common import LayerNorm2d, MLPBlock
 from segment_anything.modeling.image_encoder import Attention, PatchEmbed, window_partition, window_unpartition
 
+
+
+
 class LayerNorm3d(nn.Module):
     def __init__(self, num_channels: int, eps: float = 1e-6) -> None:
         super().__init__()
@@ -51,12 +54,27 @@ class Hiera(nn.Module):
 
     def __init__(
         self,
-        img_size: int = 1024,
-        patch_size: int = 16,
+        img_size: int = 128,
+        patch_size: int = 3,
+        stride:int=2,
+        padding:int=1,
+        patch_depth: int=32,
         in_chans: int = 3,
         embed_dim: int = 96,
-        num_heads: int = 1, 
+        num_heads: int = 1,  # initial number of heads
         drop_path_rate: float = 0.1,  # stochastic depth
+        # out_chans: int = 256,
+        # mlp_ratio: float = 4.0,
+        # qkv_bias: bool = True,
+        # norm_layer: Type[nn.Module] = nn.LayerNorm,
+        # act_layer: Type[nn.Module] = nn.GELU,
+        # use_abs_pos: bool = True,
+        # use_rel_pos: bool = False,
+        # rel_pos_zero_init: bool = True,
+        # window_size: int = 0,
+        # cubic_window_size: int = 0,
+        # global_attn_indexes: Tuple[int, ...] = (),
+        num_slice = 16,
         q_pool: int = 3,  # number of q_pool stages
         q_stride: Tuple[int, int] = (2, 2),  # downsample stride bet. stages
         stages: Tuple[int, ...] = (1,2,7,2),  # blocks per stage
@@ -90,29 +108,40 @@ class Hiera(nn.Module):
         self.return_interm_layers = return_interm_layers
         self.patch_embed = PatchEmbed3D(
             kernel_size=(patch_size, patch_size, patch_size),
-            stride=(patch_size, patch_size, patch_size),
+            stride=(stride, stride, stride),
+            padding=(padding,padding,padding),
             in_chans=in_chans,
             embed_dim=embed_dim,
         )
         self.pos_embed: Optional[nn.Parameter] = None
 
-
+        # Initialize absolute positional embedding with pretrain image size.
         self.pos_embed = nn.Parameter(
             torch.zeros(1, img_size // patch_size, img_size // patch_size, img_size // patch_size, embed_dim)
         )
+
         self.pos_embed_window = nn.Parameter(
             torch.zeros(1, embed_dim, self.window_spec[0], self.window_spec[0],self.window_spec[0])
         )
+        
 
+ 
         self.global_att_blocks = global_att_blocks
 
         cur_stage = 1
-
+ 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
+
+
         self.blocks=nn.ModuleList()
+
+        
+
         for i in range(depth):
             dim_out = embed_dim
-
+            # lags by a block, so first block of
+            # next stage uses an initial window size
+            # of previous stage and final window size of current stage
             window_size = self.window_spec[cur_stage - 1]
 
             if self.global_att_blocks is not None:
@@ -135,6 +164,7 @@ class Hiera(nn.Module):
             self.blocks.append(block)
             
 
+            
 
             embed_dim = dim_out
 
@@ -144,11 +174,13 @@ class Hiera(nn.Module):
             else [self.blocks[-1].dim_out]
         )
     def _get_pos_embed(self, dhw: Tuple[int, int, int]) -> torch.Tensor:
-        d, h, w = dhw 
+        d, h, w = dhw  
 
-        pos_embed = F.interpolate(self.pos_embed.permute(0,4,1,2,3), size=(d, h, w), mode="trilinear", align_corners=False)  
+   
+        pos_embed = F.interpolate(self.pos_embed.permute(0,4,1,2,3), size=(d, h, w), mode="trilinear", align_corners=False) 
 
-        window_embed = self.pos_embed_window 
+   
+        window_embed = self.pos_embed_window  # shape: [1, C, d_win, h_win, w_win]
 
         tile_shape = [x // y for x, y in zip(pos_embed.shape[2:], window_embed.shape[2:])]
         window_embed = window_embed.repeat(1, 1, *tile_shape)
@@ -167,12 +199,11 @@ class Hiera(nn.Module):
 
         outputs = []
         for i, blk in enumerate(self.blocks):
-
             x = blk(x)
-
             if (i == self.stage_ends[-1] or i in self.stage_ends) and self.return_interm_layers:
                 feats = x.permute(0, 4, 1, 2, 3)
-                outputs.append(feats)    
+                outputs.append(feats)
+
         return outputs
     
 
@@ -186,6 +217,7 @@ class MultiScaleBlock(nn.Module):
             num_heads: int,
             mlp_ratio: float = 4.0,
             drop_path: float = 0.0,
+            # qkv_bias: bool = True,
             norm_layer: Type[nn.Module] = nn.LayerNorm,
             act_layer: Type[nn.Module] = nn.GELU,
             q_stride: Tuple[int, int] = None,
@@ -225,6 +257,11 @@ class MultiScaleBlock(nn.Module):
             dim,
             dim_out,
             num_heads=num_heads,
+            # qkv_bias=qkv_bias,
+            # use_rel_pos=use_rel_pos,
+            # rel_pos_zero_init=rel_pos_zero_init,
+            # input_size=input_size if window_size == 0 else (window_size, window_size, window_size),
+            # res_size=(res_size, res_size, res_size),
             q_pool=self.pool,
 
         )
@@ -233,17 +270,19 @@ class MultiScaleBlock(nn.Module):
         self.norm2 = norm_layer(dim_out)
         self.mlp = MLP(dim_out, int(dim_out * mlp_ratio), dim_out,num_layers=2,activation=act_layer)
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
+        # self.adapter = Adapter(input_dim=dim, mid_dim=dim // 2)
         if dim != dim_out:
             self.proj = nn.Linear(dim, dim_out)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+
         shortcut = x
         x = self.norm1(x)
         window_size=self.window_size
-
+        # Skip connection
         if self.dim != self.dim_out:
             shortcut = do_pool(self.proj(x), self.pool)
-
+        # Window partition
         if self.window_size > 0:
             H, W, D = x.shape[1], x.shape[2], x.shape[3]
 
@@ -252,7 +291,7 @@ class MultiScaleBlock(nn.Module):
         x = self.attn(x)
 
         if self.q_stride:
-
+            # Shapes have changed due to Q pooling
             window_size = self.window_size // self.q_stride[0]
             H, W,D = shortcut.shape[1:4]
 
@@ -260,11 +299,12 @@ class MultiScaleBlock(nn.Module):
             pad_w = (window_size - W % window_size) % window_size
             pad_d = (window_size - D % window_size) % window_size
             pad_hw = (H + pad_h, W + pad_w,D+pad_d)
-        # Reverse window partition
+
         if self.window_size > 0:
             x = window_unpartition(x, window_size, pad_hw, (H, W, D))
 
         B,H,W,D,C=x.shape[0],x.shape[1],x.shape[2],x.shape[3],x.shape[4]
+
 
         x = shortcut + self.drop_path(x)
 
@@ -281,8 +321,12 @@ class MultiScaleAttention(nn.Module):
             dim: int,
             dim_out:int,
             num_heads: int = 8,
+            # qkv_bias: bool = True,
+            # use_rel_pos: bool = False,
+            # rel_pos_zero_init: bool = True,
+            # input_size: Optional[Tuple[int, int]] = None,
             q_pool: nn.Module = None,
-
+            # res_size = None
     ) -> None:
         """
         Args:
@@ -299,17 +343,18 @@ class MultiScaleAttention(nn.Module):
         head_dim = dim_out // num_heads
         self.scale = head_dim ** -0.5
         self.num_heads = num_heads
-
+        # print(input_size)
 
         self.q_pool = q_pool
         self.qkv = nn.Linear(dim, dim_out * 3)
-        self.proj = nn.Linear(dim_out, dim_out)#self.qkv: 用于将输入特征映射到查询（Q）、键（K）和值（V）。它的输出维度是 dim * 3，因为查询、键和值是分开的。
+        self.proj = nn.Linear(dim_out, dim_out)
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, H, W, D, _ = x.shape
-
+ 
         qkv = self.qkv(x).reshape(B, H * W * D, 3, self.num_heads, -1)
+
 
         q, k, v = torch.unbind(qkv, 2)
 
@@ -318,7 +363,6 @@ class MultiScaleAttention(nn.Module):
             q = do_pool(q.reshape(B, H, W,D ,-1), self.q_pool)
             H, W,D = q.shape[1:4]  # downsampled shape
             q = q.reshape(B, H * W*D, self.num_heads, -1)
-
         x = F.scaled_dot_product_attention(
             q.transpose(1, 2),
             k.transpose(1, 2),
@@ -326,6 +370,8 @@ class MultiScaleAttention(nn.Module):
         )
         x = x.transpose(1, 2).reshape(B, H, W, D, -1)
         x = self.proj(x)
+
+
 
 
 
@@ -483,11 +529,11 @@ class PatchEmbed3D(nn.Module):
 
     def __init__(
             self,
-            kernel_size: Tuple[int, int] = (16, 16, 16),
-            stride: Tuple[int, int] = (16, 16, 16),
-            padding: Tuple[int, int] = (0, 0, 0),
+            kernel_size: Tuple[int, int] = (3,3,3),
+            stride: Tuple[int, int] = (2,2,2),
+            padding: Tuple[int, int] = (1,1,1),
             in_chans: int = 1,
-            embed_dim: int = 768,
+            embed_dim: int = 96,
     ) -> None:
         """
         Args:
@@ -510,6 +556,7 @@ class PatchEmbed3D(nn.Module):
         # B C X Y Z -> B X Y Z C
         x = x.permute(0, 2, 3, 4, 1)
         return x
+
 
 
 
