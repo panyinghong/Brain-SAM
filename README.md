@@ -25,7 +25,7 @@ nohup env CUDA_VISIBLE_DEVICES=0,1 torchrun --nproc_per_node=2 train.py --data_p
 ```
 
 ## Models
-The model weights used in our experiments can be downloaded from this ([Baidu Netdisk](https://pan.baidu.com/s/1wwHc15Qe036evuaCypRgfg?pwd=b2bd)) link.
+The model weights used in our experiments can be downloaded from this ([Baidu Netdisk](https://pan.baidu.com/s/1EhiJ1VxRvIVhahxmDeG5ng?pwd=ajrs)) link.
 ## Inference
 ```bash
 python -m torch.distributed.run --nproc_per_node=2 --master_port=29857 test.py
